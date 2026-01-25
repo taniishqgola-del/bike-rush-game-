@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Bike Rider MAX+</title>
+
+<style>
+html, body{
+  margin:0;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background: radial-gradient(circle at top,#020024,#090979,#00d4ff);
+}
+
+canvas{
+  display:block;
+  margin:auto;
+  border-radius:18px;
+  box-shadow:0 0 90px rgba(0,255,255,0.7);
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game" width="400" height="600"></canvas>
+
+<script>
+const c = document.getElementById("game");
+const x = c.getContext("2d");
+
+/* ===== VISUAL SCALE FIX ONLY ===== */
+function resizeCanvas(){
+  let scale = Math.min(
+    window.innerWidth / 400,
+    window.innerHeight / 600
+  );
+  c.style.width = (400 * scale) + "px";
+  c.style.height = (600 * scale) + "px";
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+/* ================================= */
+
+// Bike
+let bike = {
+  x: 180, y: 460, w: 40, h: 70,
+  sp: 0, max: 3, acc: 0.3, fr: 0.88,
+  magnet: 0, shield: false, shieldTime:0, boost: 0
+};
+
+let k = {}, tilt = 0;
+let score = 0, coins = 0, level = 1;
+let shake = 0, slow = 1, over = false;
+let gameStarted = false;
+
+let enemy = { x: 180, y: -120, s: 48, sp: 2.5 };
+let coin = { x: 200, y: -200, r: 10 }; 
+let power = { x: 200, y: -300, type: "magnet" };
+
+let roadY = 0;
+let highScore = localStorage.getItem("highScore") || 0;
+
+// Controls
+addEventListener("keydown", e => k[e.key.toLowerCase()] = 1);
+addEventListener("keyup", e => k[e.key.toLowerCase()] = 0);
+addEventListener("deviceorientation", e => tilt = e.gamma || 0);
+
+// START CLICK (scale safe)
+c.addEventListener("click", e => {
+  if (!gameStarted) {
+    let r = c.getBoundingClientRect();
+    let sx = c.width / r.width;
+    let sy = c.height / r.height;
+    let cx = (e.clientX - r.left) * sx;
+    let cy = (e.clientY - r.top) * sy;
+
+    if (cx > 150 && cx < 250 && cy > 350 && cy < 400)
+      gameStarted = true;
+  }
+});
+
+// Road
+function road(speedMultiplier=1) {
+  let g = x.createLinearGradient(0,0,0,600);
+  g.addColorStop(0,"#222");
+  g.addColorStop(1,"#000");
+  x.fillStyle=g;
+  x.fillRect(0,0,400,600);
+
+  x.shadowBlur=12; x.shadowColor="#fff";
+  x.fillStyle="#eee";
+  for(let i=0;i<12;i++)
+    x.fillRect(195, roadY+i*70, 10, 40);
+  x.shadowBlur=0;
+
+  roadY += (2+(level-1)*0.5)*speedMultiplier;
+  if(roadY>70) roadY=0;
+}
+
+// Bike
+function drawBike(){
+  if(bike.shield){
+    x.beginPath();
+    x.strokeStyle="#00e5ff";
+    x.lineWidth=3;
+    x.arc(bike.x+20,bike.y+40,38,0,Math.PI*2);
+    x.stroke();
+  }
+
+  x.shadowBlur=20;
+  x.shadowColor=bike.boost?"#ff9800":"#ff1744";
+
+  x.fillStyle="#ff1744";
+  x.beginPath();
+  x.moveTo(bike.x+8,bike.y+50);
+  x.lineTo(bike.x+32,bike.y+50);
+  x.lineTo(bike.x+36,bike.y+30);
+  x.lineTo(bike.x+22,bike.y+18);
+  x.lineTo(bike.x+10,bike.y+30);
+  x.closePath();
+  x.fill();
+
+  x.fillStyle="#111";
+  x.fillRect(bike.x+19,bike.y+16,12,4);
+
+  x.shadowColor="#000"; x.shadowBlur=8;
+  x.fillStyle="#000";
+  x.beginPath();
+  x.arc(bike.x+12,bike.y+65,10,0,Math.PI*2);
+  x.arc(bike.x+28,bike.y+65,10,0,Math.PI*2);
+  x.fill();
+  x.shadowBlur=0;
+}
+
+// Enemy / Coin / Power
+function drawEnemy(){
+  x.shadowBlur=30; x.shadowColor="#00e5ff";
+  x.fillStyle="#000";
+  x.fillRect(enemy.x,enemy.y,enemy.s,enemy.s);
+  x.fillStyle="#00e5ff";
+  x.fillRect(enemy.x+6,enemy.y+12,enemy.s-12,8);
+  x.shadowBlur=0;
+}
+function drawCoin(){
+  x.shadowBlur=20; x.shadowColor="#ffd700";
+  x.beginPath();
+  x.arc(coin.x,coin.y,coin.r,0,Math.PI*2);
+  x.fillStyle="#ffd700"; x.fill();
+  x.shadowBlur=0;
+}
+function drawPower(){
+  x.shadowBlur=25;
+  x.shadowColor=
+    power.type==="magnet"?"#ff00ff":
+    power.type==="shield"?"#00e5ff":"#ff9800";
+  x.beginPath();
+  x.arc(power.x,power.y,16,0,Math.PI*2);
+  x.fillStyle=x.shadowColor; x.fill();
+  x.shadowBlur=0;
+}
+
+// Move
+function move(){
+  if(k.a) bike.sp-=bike.acc;
+  if(k.d) bike.sp+=bike.acc;
+  bike.sp+=tilt*0.05;
+  bike.sp*=bike.fr;
+  bike.sp=Math.max(-bike.max,Math.min(bike.max,bike.sp));
+  bike.x+=bike.sp;
+  bike.x=Math.max(0,Math.min(360,bike.x));
+}
+
+// Collision
+function hit(ax,ay,s){
+  return bike.x<ax+s && bike.x+bike.w>ax &&
+         bike.y<ay+s && bike.y+bike.h>ay;
+}
+
+// Start Screen
+function drawStartScreen(){
+  x.fillStyle="#000";
+  x.fillRect(0,0,400,600);
+  x.fillStyle="#00e5ff";
+  x.font="bold 48px Arial";
+  x.textAlign="center";
+  x.fillText("Bike Rush",200,200);
+  x.fillStyle="#ff0000";
+  x.fillRect(150,350,100,50);
+  x.fillStyle="#fff";
+  x.font="20px Arial";
+  x.fillText("Start Game",200,380);
+  x.textAlign="left";
+}
+
+// LOOP — ORIGINAL FULL LOGIC
+function loop(){
+  if(!gameStarted){
+    drawStartScreen();
+    requestAnimationFrame(loop);
+    return;
+  }
+  if(over) return;
+
+  let sm = 1;
+  if(bike.boost>0){ sm=1.5; bike.boost--; }
+
+  road(sm);
+  move();
+  drawBike(); drawEnemy(); drawCoin(); drawPower();
+
+  enemy.y += enemy.sp * sm;
+  coin.y += 4 * sm;
+  power.y += 3.5 * sm;
+
+  if(bike.magnet>0){
+    coin.x += (bike.x+bike.w/2-coin.x)*0.1;
+    coin.y += (bike.y+bike.h/2-coin.y)*0.05;
+    bike.magnet--;
+  }
+
+  score += 0.05;
+  if(Math.floor(score)>highScore) highScore=Math.floor(score);
+
+  if(enemy.y>600){
+    enemy.y=-120;
+    enemy.x=Math.random()*280+40;
+    level=Math.min(6,Math.floor(score/100)+1);
+    enemy.sp=2.5+(level-1)*0.5;
+    bike.max=3+(level-1)*0.2;
+  }
+
+  if(coin.y>600){
+    coin.y=-150-Math.random()*100;
+    coin.x=Math.random()*280+40;
+  }
+
+  if(power.y>600){
+    power.y=-200-Math.random()*200;
+    power.x=Math.random()*280+40;
+    let r=Math.random();
+    power.type=r<0.33?"magnet":r<0.66?"shield":"boost";
+  }
+
+  if(hit(coin.x-10,coin.y-10,20)){
+    coins++;
+    coin.y=-150;
+    coin.x=Math.random()*280+40;
+  }
+
+  if(hit(power.x-16,power.y-16,32)){
+    if(power.type==="magnet") bike.magnet=480;
+    if(power.type==="shield"){ bike.shield=true; bike.shieldTime=600; }
+    if(power.type==="boost") bike.boost=240;
+    power.y=-200;
+  }
+
+  if(bike.shieldTime>0) bike.shieldTime--;
+  else bike.shield=false;
+
+  if(hit(enemy.x,enemy.y,enemy.s)){
+    if(bike.shield){
+      bike.shield=false;
+      enemy.y=-120;
+    }else{
+      over=true;
+      localStorage.setItem("highScore",highScore);
+      alert(`GAME OVER\nScore: ${Math.floor(score)}\nCoins: ${coins}`);
+      location.reload();
+    }
+  }
+
+  // HUD
+  x.fillStyle="#00e5ff";
+  x.font="16px Arial";
+  x.fillText("Score: "+Math.floor(score),10,22);
+  x.fillText("Coins: "+coins,10,42);
+  x.fillText("Level: "+level+"/6",10,62);
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
